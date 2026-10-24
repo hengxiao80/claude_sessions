@@ -31,12 +31,14 @@ def in_git(d):
 def cmd_init(args):
     """Write the skeleton .claude-sessions.toml into DIR, create the directories of its paths (notes/,
     notes/handoffs/, notes/transcripts/) where missing, write the index (notes/sessions.md), and add the index and
-    the transcripts directory to DIR/.gitignore (generated files; the dumps hold whole transcripts). The .gitignore
-    is written in a directory that is no git work tree yet too, ready for when it is."""
+    the transcripts directory to DIR/.gitignore (generated files; the dumps hold whole transcripts). DIR must be in
+    a git work tree; if it is not, init does nothing."""
     root = os.path.realpath(args.dir)
     path = os.path.join(root, CONFIG)
     if not os.path.isdir(root):
         sys.exit(f'{root} is no directory.')
+    if not in_git(root):
+        sys.exit(f'{root} is in no git work tree; nothing done. Run `git init` there first.')
     if os.path.exists(path):
         print(f'{path} exists; nothing done.')
         return 1
@@ -52,8 +54,7 @@ def cmd_init(args):
             os.makedirs(d)
             print(f'created {d}/')
     print(index.write(p)[0])
-    print(add_gitignore(root, [os.path.relpath(p.index, root), os.path.relpath(p.transcripts, root) + '/']) +
-          ('' if in_git(root) else ' (no git work tree yet; ready for when there is one)'))
+    print(add_gitignore(root, [os.path.relpath(p.index, root), os.path.relpath(p.transcripts, root) + '/']))
     return 0
 
 

@@ -48,10 +48,9 @@ claude-sessions init
 
 writes a skeleton `.claude-sessions.toml`, creates `notes/`, `notes/handoffs/` and `notes/transcripts/` where
 missing, writes the index `notes/sessions.md`, and adds `notes/sessions.md` and `notes/transcripts/` to `.gitignore`
-(both generated; the dumps hold whole transcripts, tool output included). It writes the `.gitignore` lines in a
-directory that is no git work tree yet too, ready for when it is one, and does nothing at all where a
-`.claude-sessions.toml` exists already. The file is the opt-in: delete it, and the hooks leave the project alone.
-Commit it.
+(both generated; the dumps hold whole transcripts, tool output included). It does nothing at all outside a git
+work tree (run `git init` first) or where a `.claude-sessions.toml` exists already. The file is the opt-in: delete
+it, and the hooks leave the project alone. Commit it.
 
 The project root is the directory of the nearest `.claude-sessions.toml` at or above the current one. The project's
 sessions are those started at the root or below it (Claude Code keeps them in `~/.claude/projects/<the start

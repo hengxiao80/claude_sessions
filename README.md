@@ -46,9 +46,12 @@ cd <project root>
 claude-sessions init
 ```
 
-writes a skeleton `.claude-sessions.toml`, and in a git work tree offers to add the index file and the transcripts
-directory to `.gitignore` (both generated; the dumps hold whole transcripts, tool output included). The file is
-the opt-in: delete it, and the hooks leave the project alone. Commit it.
+writes a skeleton `.claude-sessions.toml`, creates `notes/`, `notes/handoffs/` and `notes/transcripts/` where
+missing, writes the index `notes/sessions.md`, and adds `notes/sessions.md` and `notes/transcripts/` to `.gitignore`
+(both generated; the dumps hold whole transcripts, tool output included). It writes the `.gitignore` lines in a
+directory that is no git work tree yet too, ready for when it is one, and does nothing at all where a
+`.claude-sessions.toml` exists already. The file is the opt-in: delete it, and the hooks leave the project alone.
+Commit it.
 
 The project root is the directory of the nearest `.claude-sessions.toml` at or above the current one. The project's
 sessions are those started at the root or below it (Claude Code keeps them in `~/.claude/projects/<the start
@@ -111,7 +114,7 @@ All of them work on the project at or above the current directory.
 
 | Command | Does |
 |---|---|
-| `claude-sessions init [DIR]` | write the skeleton `.claude-sessions.toml` |
+| `claude-sessions init [DIR]` | start a project: the skeleton `.claude-sessions.toml`, `notes/` with the index, the `.gitignore` lines |
 | `claude-sessions index [--stdout]` | rebuild the index (or print it), with the counts and the checks |
 | `claude-sessions delete [-n] [-y] [-g KEY]... [ID]...` | delete the sessions of groups (`empty`: those without prompts) or given by ID prefix; lists them and asks first, `-n` only lists |
 | `claude-sessions dump SESSION [LABEL]` | dump a transcript (a `.jsonl`, or a session ID prefix) to `<transcripts>/<UTC time>_<ID[:8]>_<LABEL>.md` |

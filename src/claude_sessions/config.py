@@ -140,36 +140,17 @@ class Project:
         return cls(root) if root else None
 
 
-def init(directory):
-    """Write the skeleton .claude-sessions.toml into `directory`; then offer .gitignore lines for the generated
-    files if it is a git work tree. Returns an exit status."""
-    root = os.path.realpath(directory)
-    path = os.path.join(root, CONFIG)
-    if os.path.exists(path):
-        print(f'{path} exists; nothing written.')
-        return 1
-    outer = find_root(os.path.dirname(root))
-    with open(path, 'x') as f:
-        f.write(SKELETON)
-    print(f'wrote {path}')
-    if outer:
-        print(f'Sessions started here now belong to this project, not to the one at {outer}.')
-    if not os.path.exists(os.path.join(root, '.git')):
-        return 0
+def add_gitignore(root, entries):
+    """Append to root/.gitignore those of `entries` it lacks as lines, under a comment; returns what it did."""
     ignore = os.path.join(root, '.gitignore')
     text = ''
     if os.path.exists(ignore):
         with open(ignore) as f:
             text = f.read()
-    add = [x for x in (PATHS['index'], PATHS['transcripts'] + '/') if x not in text.splitlines()]
+    add = [x for x in entries if x not in text.splitlines()]
     if not add:
-        return 0
-    lines = ['# Claude Code session index and transcript dumps (claude-sessions)'] + add
-    print('Suggested for .gitignore (generated files; the dumps hold whole transcripts):\n' +
-          '\n'.join('  ' + x for x in lines))
-    if os.isatty(0) and input('Add them? [y/N] ').strip().lower() in ('y', 'yes'):
-        sep = ('' if text.endswith('\n') or not text else '\n') + ('\n' if text.strip() else '')
-        with open(ignore, 'a') as f:
-            f.write(sep + '\n'.join(lines) + '\n')
-        print(f'added to {ignore}')
-    return 0
+        return f"{ignore} has {', '.join(entries)} already"
+    sep = ('' if text.endswith('\n') or not text else '\n') + ('\n' if text.strip() else '')
+    with open(ignore, 'a') as f:
+        f.write(sep + '# Claude Code session index and transcript dumps (claude-sessions)\n' + '\n'.join(add) + '\n')
+    return f"added {', '.join(add)} to {ignore}"

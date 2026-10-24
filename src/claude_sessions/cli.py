@@ -6,10 +6,11 @@ import argparse
 import glob
 import json
 import os
+import subprocess
 import sys
 
 from . import delete, dump, index
-from .config import CONFIG, ConfigError, Project, first_cwd, init
+from .config import CONFIG, SKELETON, ConfigError, Project, add_gitignore, find_root, first_cwd
 
 
 def project():
@@ -19,8 +20,41 @@ def project():
     return p
 
 
+def in_git(d):
+    try:
+        return subprocess.run(['git', '-C', d, 'rev-parse', '--is-inside-work-tree'], capture_output=True,
+                              text=True).stdout.strip() == 'true'
+    except OSError:
+        return False
+
+
 def cmd_init(args):
-    return init(args.dir)
+    """Write the skeleton .claude-sessions.toml into DIR, create the directories of its paths (notes/,
+    notes/handoffs/, notes/transcripts/) where missing, write the index (notes/sessions.md), and add the index and
+    the transcripts directory to DIR/.gitignore (generated files; the dumps hold whole transcripts). The .gitignore
+    is written in a directory that is no git work tree yet too, ready for when it is."""
+    root = os.path.realpath(args.dir)
+    path = os.path.join(root, CONFIG)
+    if not os.path.isdir(root):
+        sys.exit(f'{root} is no directory.')
+    if os.path.exists(path):
+        print(f'{path} exists; nothing done.')
+        return 1
+    outer = find_root(os.path.dirname(root))
+    with open(path, 'x') as f:
+        f.write(SKELETON)
+    print(f'wrote {path}')
+    if outer:
+        print(f'Sessions started here now belong to this project, not to the one at {outer}.')
+    p = Project(root)
+    for d in (os.path.dirname(p.index), p.handoffs, p.transcripts):
+        if d and not os.path.isdir(d):
+            os.makedirs(d)
+            print(f'created {d}/')
+    print(index.write(p)[0])
+    print(add_gitignore(root, [os.path.relpath(p.index, root), os.path.relpath(p.transcripts, root) + '/']) +
+          ('' if in_git(root) else ' (no git work tree yet; ready for when there is one)'))
+    return 0
 
 
 def cmd_index(args):
@@ -89,7 +123,8 @@ def main(argv=None):
     ap = argparse.ArgumentParser(prog='claude-sessions', description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest='cmd', required=True, metavar='command')
-    a = sub.add_parser('init', help=f'write a skeleton {CONFIG} (here, or in DIR)')
+    a = sub.add_parser('init', help=f'start a project: {CONFIG}, notes/, the index, .gitignore lines (here, or in DIR)',
+                       description=cmd_init.__doc__)
     a.add_argument('dir', nargs='?', default='.', metavar='DIR')
     a.set_defaults(run=cmd_init)
     a = sub.add_parser('index', help='rebuild the session index')

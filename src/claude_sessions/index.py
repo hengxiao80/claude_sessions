@@ -1,33 +1,26 @@
-#!/usr/bin/env python3
-"""Index this repo's Claude Code sessions by group: writes notes/sessions.md.
+"""The session index: a project's Claude Code sessions by group, written to its index file (notes/sessions.md).
 
-Reads the session transcripts Claude Code keeps for this repo (~/.claude/projects/<repo path with
-every non-alphanumeric character as '-'>/*.jsonl) and sorts them into the groups of
-notes/session_groups.toml (rules at its top). Per session: dates (local time), name, number of
-prompts, session ID and transcript dumps (notes/transcripts/*_<ID[:8]>_*.md, written by
-scripts/transcript_to_md.py). Then one table of the hand-off notes in notes/handoffs/:
+Reads the session transcripts Claude Code keeps for the project (config.session_dirs) and sorts them into the groups
+of .claude-sessions.toml (rules at its top and in the README). Per session: dates (local time), name, number of
+prompts, session ID and transcript dumps (<transcripts>/*_<ID[:8]>_*.md, written by the hooks or
+`claude-sessions dump`). Then one table of the hand-off notes in <handoffs>/:
 - out: the date and session in the note's 'Written <date> at the end of / during session "<name>"';
-- in: the session the note's title names ('# Hand-off: "<name>..."'), or else a session whose first
-  prompt names the note's file; the date is that session's first.
+- in: the session the note's title names ('# Hand-off: "<name>..."'), or else a session whose first prompt names
+  the note's file; the date is that session's first.
+Last, the checks: group entries that claim no session, and sessions named '<word>: ...' with no group <word>.
 
-Run by the project hooks in .claude/settings.json at every session start and end (output discarded,
-since SessionStart output would go into Claude's context). By hand: uv run scripts/session_index.py
-[--stdout]; this also prints any entry of session_groups.toml that claims no session.
+Run by the hooks at every session start and end (`claude-sessions hook`), and by hand: claude-sessions index
+[--stdout]; by hand it also prints the counts and the checks.
 """
 import datetime
 import glob
 import json
 import os
 import re
-import sys
-import tomllib
 
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-NOTES = os.path.join(REPO, 'notes')
-GROUPS = os.path.join(NOTES, 'session_groups.toml')
-OUT = os.path.join(NOTES, 'sessions.md')
-PROJECT_DIR = os.path.expanduser('~/.claude/projects/' + re.sub(r'[^A-Za-z0-9]', '-', os.path.realpath(REPO)))
-HANDOFF_REF = re.compile(r'notes/handoffs/([\w.-]+\.md)')
+from .config import CONFIG, tilde
+
+KEYED = re.compile(r'\s*([A-Za-z0-9_-]+)\s*:')      # a name that looks like '<group key>: ...'
 
 
 def norm(s):
@@ -44,9 +37,9 @@ def prompt_text(m):
     return c
 
 
-def read_session(path):
-    s = {'id': os.path.splitext(os.path.basename(path))[0], 'custom': None, 'ai': None,
-         'prompts': 0, 'first_prompt': None, 'refs': set(), 't0': None, 't1': None}
+def read_session(path, handoff_ref=None):
+    s = {'id': os.path.splitext(os.path.basename(path))[0], 'dir': os.path.dirname(path), 'custom': None,
+         'ai': None, 'prompts': 0, 'first_prompt': None, 'refs': set(), 't0': None, 't1': None}
     with open(path, errors='replace') as f:
         for line in f:
             i = line.find('"timestamp":"')
@@ -72,7 +65,8 @@ def read_session(path):
                     s['prompts'] += 1
                     if not s['first_prompt']:
                         s['first_prompt'] = ' '.join(text.split())[:60]
-                        s['refs'].update(HANDOFF_REF.findall(text))
+                        if handoff_ref:
+                            s['refs'].update(handoff_ref.findall(text))
     s['name'] = s['custom'] or s['ai'] or s['first_prompt'] or '(no name)'
     for k in ('t0', 't1'):
         s[k] = (datetime.datetime.fromisoformat(s[k].replace('Z', '+00:00')).astimezone() if s[k]
@@ -80,15 +74,17 @@ def read_session(path):
     return s
 
 
-def read_handoffs():
+def read_handoffs(p):
+    if not p.handoffs:
+        return []
     notes = []
-    for p in sorted(glob.glob(os.path.join(NOTES, 'handoffs', '*.md'))):
-        with open(p) as f:
-            text = f.read(3000)
+    for f in sorted(glob.glob(os.path.join(p.handoffs, '*.md'))):
+        with open(f) as fh:
+            text = fh.read(3000)
         title = re.search(r'"([^"]+)"', text.split('\n', 1)[0])
         m = re.search(r'Written (\d{4}-\d\d-\d\d) (?:at the end of|during) session "([^"]+)"', text)
-        notes.append({'path': p, 'opens': title.group(1).split(':')[0] if title else None,
-                      'written': m.group(1) if m else os.path.basename(p)[:10],
+        notes.append({'path': f, 'opens': title.group(1).split(':')[0] if title else None,
+                      'written': m.group(1) if m else os.path.basename(f)[:10],
                       'by': m.group(2) if m else None})
     return notes
 
@@ -104,29 +100,33 @@ def assign(s, groups):
             return g['key'], None
     names = [norm(n) for n in (s['custom'], s['ai']) if n]
     for g in groups:
-        for p in g.get('names', []):
-            if any(norm(p) in n for n in names):
-                return g['key'], (g['key'], p)
+        for n in g.get('names', []):
+            if any(norm(n) in x for x in names):
+                return g['key'], (g['key'], n)
     return None, None
 
 
-def link(path, text):
-    return f'[{text}]({os.path.relpath(path, NOTES)})'
+def link(p, path, text):
+    return f'[{text}]({os.path.relpath(path, os.path.dirname(p.index))})'
 
 
 def label(s):
     return f"**{s['custom']}**" if s['custom'] else f"*{s['name']}*"
 
 
-def row(s):
-    dumps = sorted(glob.glob(os.path.join(NOTES, 'transcripts', f"*_{s['id'][:8]}_*.md")))
-    dumps = ', '.join(link(p, os.path.basename(p)) for p in dumps)
+def dumps(p, s):
+    return sorted(glob.glob(os.path.join(p.transcripts, f"*_{s['id'][:8]}_*.md"))) if p.transcripts else []
+
+
+def row(p, s):
     d0, d1 = f"{s['t0']:%m-%d}", f"{s['t1']:%m-%d}"
-    dates = d0 if d0 == d1 else f'{d0} – {d1}'
-    return f"| {dates} | {label(s)} | {s['prompts']} | `{s['id']}` | {dumps} |"
+    cells = [d0 if d0 == d1 else f'{d0} – {d1}', label(s), str(s['prompts']), f"`{s['id']}`"]
+    if p.transcripts:
+        cells.append(', '.join(link(p, f, os.path.basename(f)) for f in dumps(p, s)))
+    return '| ' + ' | '.join(cells) + ' |'
 
 
-def handoff_rows(notes, sessions):
+def handoff_rows(p, notes, sessions):
     named = {norm(s['custom']): s for s in sessions if s['custom']}   # later sessions win
     rows = []
     for h in notes:
@@ -134,52 +134,65 @@ def handoff_rows(notes, sessions):
         out = f"{label(by)} (`{by['id'][:8]}`)" if by else (f"{h['by']} (not found)" if h['by'] else '')
         into = [named[norm(h['opens'])]] if h['opens'] and norm(h['opens']) in named else [
             s for s in sessions if os.path.basename(h['path']) in s['refs']]
-        rows.append(f"| {link(h['path'], os.path.basename(h['path']))} | {h['written']} | {out} | " +
+        rows.append(f"| {link(p, h['path'], os.path.basename(h['path']))} | {h['written']} | {out} | " +
                     '; '.join(f"{s['t0']:%Y-%m-%d}" for s in into) + ' | ' +
                     '; '.join(f"{label(s)} (`{s['id'][:8]}`)" for s in into) + ' |')
     return rows
 
 
-def load_groups():
-    with open(GROUPS, 'rb') as f:
-        return tomllib.load(f)['group']
-
-
-def load_sessions():
-    sessions = [read_session(p) for p in glob.glob(os.path.join(PROJECT_DIR, '*.jsonl'))]
+def load_sessions(p):
+    ref = (re.compile(re.escape(os.path.relpath(p.handoffs, p.root)) + r'/([\w.-]+\.md)') if p.handoffs
+           else None)
+    sessions = [read_session(f, ref) for d in p.dirs for f in glob.glob(os.path.join(d, '*.jsonl'))]
     sessions.sort(key=lambda s: s['t0'])
     return sessions
 
 
 def classify(sessions, groups):
-    """Sessions with prompts by group key (None: ungrouped), sessions without, and the claiming entries."""
+    """Sessions with prompts by group key (None: ungrouped), sessions without, and the claiming entries. Also sets
+    each session's 'group'."""
     empty = [s for s in sessions if s['prompts'] == 0]
     by_group, used = {}, set()
     for s in sessions:
         if s['prompts']:
-            key, entry = assign(s, groups)
-            by_group.setdefault(key, []).append(s)
+            s['group'], entry = assign(s, groups)
+            by_group.setdefault(s['group'], []).append(s)
             used.add(entry)
     return by_group, empty, used
 
 
-def main():
-    groups = load_groups()
-    sessions = load_sessions()
-    notes = read_handoffs()
-    by_group, empty, used = classify(sessions, groups)
-    unused =[f"{g['key']}: {e!r}" for g in groups for e in g.get('ids', []) + g.get('names', [])
-              if (g['key'], e) not in used]
+def checks(sessions, groups, used):
+    """Group entries that claim no session, and sessions named '<word>: ...' with no group <word>."""
+    found = [f"`{g['key']}`: {'ids' if e in g.get('ids', []) else 'names'} entry {e!r} claims no session "
+             '(stale, or covered by an earlier entry)'
+             for g in groups for e in g.get('ids', []) + g.get('names', []) if (g['key'], e) not in used]
+    keys = {g['key'].lower() for g in groups}
+    for s in sessions:
+        m = KEYED.match(s['custom'] or '')
+        if s['prompts'] and m and m.group(1).lower() not in keys:
+            found.append(f"{label(s)} (`{s['id'][:8]}`): no group `{m.group(1)}` (a typo, or a group still to "
+                         'add); filed under ' + (f"`{s['group']}`" if s['group'] else 'Ungrouped'))
+    return found
+
+
+def build(p):
+    """The index text, a one-line summary, and the checks."""
+    sessions = load_sessions(p)
+    notes = read_handoffs(p)
+    by_group, empty, used = classify(sessions, p.groups)
+    found = checks(sessions, p.groups, used)
 
     now = datetime.datetime.now().astimezone()
-    lines = ['# Claude Code sessions for this repo', '',
-             f"Written by `scripts/session_index.py` on {now:%Y-%m-%d %H:%M %Z} from "
-             f"`{PROJECT_DIR.replace(os.path.expanduser('~'), '~')}/` ({len(sessions)} sessions). "
-             'Groups and their rules: `notes/session_groups.toml`.', '',
+    src = ', '.join(f'`{tilde(d)}/`' for d in p.dirs)
+    lines = [f'# Claude Code sessions for {os.path.basename(p.root)}', '',
+             f"Written by `claude-sessions index` on {now:%Y-%m-%d %H:%M %Z} from {src or 'nowhere yet'} "
+             f'({len(sessions)} sessions). Groups and their rules: `{CONFIG}`.', '',
              'Resume one with `claude -r <session ID>` (or `claude -r "<name>"` if you named it). '
              'Bold: a name you gave the session; italics: Claude Code\'s own title. '
              'Prompts: messages you typed, not counting slash commands. Dates in local time.', '']
-    for g in groups + [{'key': None, 'title': 'Ungrouped'}]:
+    head = '| Dates | Name | Prompts | Session ID |' + (' Transcript dumps |' if p.transcripts else '')
+    rule = '|---|---|--:|---|' + ('---|' if p.transcripts else '')
+    for g in p.groups + [{'key': None, 'title': 'Ungrouped'}]:
         ss = by_group.get(g['key'])
         if not ss:
             continue
@@ -187,33 +200,30 @@ def main():
         d0, d1 = f"{ss[0]['t0']:%Y-%m-%d}", f"{max(s['t1'] for s in ss):%Y-%m-%d}"
         span = d0 if d0 == d1 else f'{d0} – {d1}'
         n = f"{len(ss)} session{'s' if len(ss) > 1 else ''}"
-        lines += [f"## {g['title']}{key}: {n}, {span}", '',
-                  '| Dates | Name | Prompts | Session ID | Transcript dumps |', '|---|---|--:|---|---|']
-        lines += [row(s) for s in ss] + ['']
+        lines += [f"## {g['title']}{key}: {n}, {span}", '', head, rule] + [row(p, s) for s in ss] + ['']
     if notes:
         lines += [f'## Hand-off notes: {len(notes)}', '',
                   '| Note | Out: written | Out: by session | In: picked up | In: by session |',
-                  '|---|---|---|---|---|'] + handoff_rows(notes, [s for s in sessions if s['prompts']]) + ['']
+                  '|---|---|---|---|---|'] + handoff_rows(p, notes, [s for s in sessions if s['prompts']]) + ['']
     if empty:
         lines += [f'## Without prompts: {len(empty)}', '',
                   'Opened and left, or used only for slash commands (such as a cancelled `/resume`): ' +
                   ', '.join(f"`{s['id'][:8]}` ({s['t0']:%m-%d})" for s in empty) + '.', '']
+    lines += ['## Checks', ''] + ([f'- {c}' for c in found] or ['Nothing to report.']) + ['']
 
-    text = '\n'.join(lines)
-    if '--stdout' in sys.argv[1:]:
-        print(text)
-        return
+    counts = ', '.join(f"{g['key']} {len(by_group[g['key']])}" for g in p.groups if g['key'] in by_group)
+    summary = (f"{p.index}: {counts or 'no groups'}; ungrouped {len(by_group.get(None, []))}; "
+               f'without prompts {len(empty)}')
+    return '\n'.join(lines), summary, found
+
+
+def write(p):
+    """Write the index file; returns the summary and the checks."""
+    text, summary, found = build(p)
+    os.makedirs(os.path.dirname(p.index), exist_ok=True)
     # Atomic, since the SessionStart/SessionEnd hooks of two sessions may run at once.
-    tmp = f'{OUT}.{os.getpid()}.tmp'
+    tmp = f'{p.index}.{os.getpid()}.tmp'
     with open(tmp, 'w') as f:
         f.write(text)
-    os.replace(tmp, OUT)
-    counts = ', '.join(f"{g['key']} {len(by_group[g['key']])}" for g in groups if g['key'] in by_group)
-    print(f"{OUT}: {counts}; ungrouped {len(by_group.get(None, []))}; without prompts {len(empty)}")
-    if unused:
-        print('Entries in session_groups.toml that claim no session (stale, or covered by an earlier one): ' +
-              ', '.join(unused))
-
-
-if __name__ == '__main__':
-    main()
+    os.replace(tmp, p.index)
+    return summary, found

@@ -3,7 +3,8 @@
 Reads the session transcripts Claude Code keeps for the project (config.session_dirs) and sorts them into the groups
 of .claude-sessions.toml (rules at its top and in the README). Per session: dates (local time), name, number of
 prompts, session ID and transcript dumps (<transcripts>/*_<ID[:8]>_*.md, written by the hooks or
-`claude-sessions dump`). Then one table of the hand-off notes in <handoffs>/:
+`claude-sessions dump`). A session Claude Code continued under a new ID is one entry with its continuation (fold).
+Then one table of the hand-off notes in <handoffs>/:
 - out: the date and session in the note's 'Written <date> at the end of / during session "<name>"';
 - in: the session the note's title names ('# Hand-off: "<name>..."'), or else a session whose first prompt names
   the note's file; the date is that session's first.
@@ -39,16 +40,18 @@ def prompt_text(m):
 
 def read_session(path, handoff_ref=None):
     s = {'id': os.path.splitext(os.path.basename(path))[0], 'dir': os.path.dirname(path), 'custom': None,
-         'ai': None, 'prompts': 0, 'first_prompt': None, 'refs': set(), 't0': None, 't1': None}
+         'ai': None, 'prompts': 0, 'puids': set(), 'first_prompt': None, 'refs': set(), 't0': None, 't1': None,
+         'next': None}
     with open(path, errors='replace') as f:
-        for line in f:
+        for n, line in enumerate(f):
             i = line.find('"timestamp":"')
             if i >= 0:
                 ts = line[i + 13:line.find('"', i + 13)]
                 s['t0'] = s['t0'] or ts
                 s['t1'] = ts
             # Only the small bookkeeping records and user records need parsing.
-            if not any(k in line for k in ('"type":"custom-title"', '"type":"ai-title"', '"type":"user"')):
+            if not any(k in line for k in ('"type":"custom-title"', '"type":"ai-title"', '"type":"user"',
+                                           '"type":"continued-in"')):
                 continue
             try:
                 d = json.loads(line)
@@ -59,10 +62,13 @@ def read_session(path, handoff_ref=None):
                 s['custom'] = d.get('customTitle') or s['custom']
             elif t == 'ai-title':
                 s['ai'] = d.get('aiTitle') or s['ai']
+            elif t == 'continued-in':
+                s['next'] = d.get('continuedInSessionId') or s['next']
             elif t == 'user' and not d.get('isMeta'):
                 text = prompt_text(d.get('message'))
                 if text:
                     s['prompts'] += 1
+                    s['puids'].add(d.get('uuid') or f"{s['id']}:{n}")
                     if not s['first_prompt']:
                         s['first_prompt'] = ' '.join(text.split())[:60]
                         if handoff_ref:
@@ -72,6 +78,42 @@ def read_session(path, handoff_ref=None):
         s[k] = (datetime.datetime.fromisoformat(s[k].replace('Z', '+00:00')).astimezone() if s[k]
                 else datetime.datetime.fromtimestamp(os.path.getmtime(path)).astimezone())
     return s
+
+
+def fold(sessions):
+    """One entry per conversation. When Claude Code hands a session to its background daemon, it may go on under a
+    new ID: the new transcript starts with a copy of the old one, and the old one gets a 'continued-in' record. Each
+    such chain becomes one entry under its newest session (ID, name), with the chain's dates and dumps, its prompts
+    counted once, and its sessions, oldest first, in 'members'. A session on its own is its own only member."""
+    by_id = {s['id']: s for s in sessions}
+
+    def newest(s):
+        steps, seen = 0, {s['id']}
+        while s['next'] in by_id and s['next'] not in seen:
+            s = by_id[s['next']]
+            seen.add(s['id'])
+            steps += 1
+        return s['id'], steps
+
+    chains = {}
+    for s in sessions:
+        last, steps = newest(s)
+        chains.setdefault(last, []).append((steps, s))
+    out = []
+    for last, ms in chains.items():
+        ms = [s for _, s in sorted(ms, key=lambda x: -x[0])]
+        if len(ms) == 1:
+            ms[0]['members'] = ms
+            out.append(ms[0])
+            continue
+        s = dict(by_id[last], members=ms, prompts=len(set().union(*(m['puids'] for m in ms))),
+                 refs=set().union(*(m['refs'] for m in ms)),
+                 t0=min(m['t0'] for m in ms), t1=max(m['t1'] for m in ms))
+        for k, order in (('custom', ms[::-1]), ('ai', ms[::-1]), ('first_prompt', ms)):
+            s[k] = next((m[k] for m in order if m[k]), None)
+        s['name'] = s['custom'] or s['ai'] or s['first_prompt'] or '(no name)'
+        out.append(s)
+    return out
 
 
 def read_handoffs(p):
@@ -91,10 +133,10 @@ def read_handoffs(p):
 
 def assign(s, groups):
     """(group key, the `ids` or `names` entry that claimed the session, if any)."""
-    id8 = s['id'][:8]
     for g in groups:
-        if id8 in g.get('ids', []):
-            return g['key'], (g['key'], id8)
+        for id8 in (m['id'][:8] for m in s['members']):
+            if id8 in g.get('ids', []):
+                return g['key'], (g['key'], id8)
     for g in groups:
         if s['custom'] and re.match(re.escape(g['key']) + r'\s*:', s['custom'], re.I):
             return g['key'], None
@@ -115,19 +157,24 @@ def label(s):
 
 
 def dumps(p, s):
-    return sorted(glob.glob(os.path.join(p.transcripts, f"*_{s['id'][:8]}_*.md"))) if p.transcripts else []
+    return sorted(f for m in s.get('members', [s]) for f in glob.glob(
+        os.path.join(p.transcripts, f"*_{m['id'][:8]}_*.md"))) if p.transcripts else []
 
 
 def row(p, s):
     d0, d1 = f"{s['t0']:%m-%d}", f"{s['t1']:%m-%d}"
-    cells = [d0 if d0 == d1 else f'{d0} – {d1}', label(s), str(s['prompts']), f"`{s['id']}`"]
+    sid = f"`{s['id']}`"
+    if len(s['members']) > 1:
+        sid += ' (continues ' + ', '.join(f"`{m['id'][:8]}`" for m in s['members'][:-1]) + ')'
+    cells = [d0 if d0 == d1 else f'{d0} – {d1}', label(s), str(s['prompts']), sid]
     if p.transcripts:
         cells.append(', '.join(link(p, f, os.path.basename(f)) for f in dumps(p, s)))
     return '| ' + ' | '.join(cells) + ' |'
 
 
 def handoff_rows(p, notes, sessions):
-    named = {norm(s['custom']): s for s in sessions if s['custom']}   # later sessions win
+    # Later sessions win; a folded entry answers to the names of all its members.
+    named = {norm(m['custom']): s for s in sessions for m in s['members'] + [s] if m['custom']}
     rows = []
     for h in notes:
         by = named.get(norm(h['by'])) if h['by'] else None
@@ -143,7 +190,7 @@ def handoff_rows(p, notes, sessions):
 def load_sessions(p):
     ref = (re.compile(re.escape(os.path.relpath(p.handoffs, p.root)) + r'/([\w.-]+\.md)') if p.handoffs
            else None)
-    sessions = [read_session(f, ref) for d in p.dirs for f in glob.glob(os.path.join(d, '*.jsonl'))]
+    sessions = fold([read_session(f, ref) for d in p.dirs for f in glob.glob(os.path.join(d, '*.jsonl'))])
     sessions.sort(key=lambda s: s['t0'])
     return sessions
 
@@ -189,7 +236,9 @@ def build(p):
              f'({len(sessions)} sessions). Groups and their rules: `{CONFIG}`.', '',
              'Resume one with `claude -r <session ID>` (or `claude -r "<name>"` if you named it). '
              'Bold: a name you gave the session; italics: Claude Code\'s own title. '
-             'Prompts: messages you typed, not counting slash commands. Dates in local time.', '']
+             'Prompts: messages you typed, not counting slash commands. Dates in local time. '
+             'A session Claude Code continued under a new ID (when it moved it to its background daemon) is one row '
+             'under the newest ID, the older ones after it ("continues ...").', '']
     head = '| Dates | Name | Prompts | Session ID |' + (' Transcript dumps |' if p.transcripts else '')
     rule = '|---|---|--:|---|' + ('---|' if p.transcripts else '')
     for g in p.groups + [{'key': None, 'title': 'Ungrouped'}]:

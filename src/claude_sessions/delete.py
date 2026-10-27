@@ -2,7 +2,9 @@
 
 Groups are those of the session index (rules in .claude-sessions.toml), plus `empty` (the sessions without prompts).
 Ungrouped sessions are work not yet filed, so they go only by ID. An ID can be any unique prefix of one, such as the 8
-characters the index shows for sessions without prompts.
+characters the index shows for sessions without prompts. A group takes whole rows of the index, so a session Claude
+Code continued under a new ID goes with its continuation; an ID takes only the session it names (the listing names the
+rest of its row, which then stays).
 
 Per session it deletes what Claude Code keeps under ~/.claude: the transcript projects/<project dir>/<ID>.jsonl
 (what `claude -r` lists), projects/<project dir>/<ID>/ (subagent transcripts, tool results), file-history/<ID>/
@@ -93,9 +95,10 @@ def select(groups, ids, sessions, project_groups):
             sys.exit(f"No group {key!r}; groups: {', '.join(keys + ['empty'])}")
         if not ss:
             print(f'Group {key!r} has no sessions.')
-        chosen.update((s['id'], s) for s in ss)
+        chosen.update((m['id'], m) for s in ss for m in s['members'])
+    members = [m for s in sessions for m in s['members']]
     for prefix in ids:
-        m = [s for s in sessions if s['id'].startswith(prefix.lower())]
+        m = [s for s in members if s['id'].startswith(prefix.lower())]
         if len(m) != 1:
             sys.exit(f"{prefix!r} matches " + (', '.join(s['id'] for s in m) if m else 'no session of this project'))
         chosen[m[0]['id']] = m[0]
@@ -105,6 +108,7 @@ def select(groups, ids, sessions, project_groups):
 def run(p, ids, groups, dry_run=False, yes=False):
     sessions = index.load_sessions(p)
     chosen = select(groups, ids, sessions, p.groups)
+    row = {m['id']: s for s in sessions for m in s['members']}     # session ID -> its index entry
     live = live_sessions()
     named = {}                          # session name -> hand-off notes that name it
     for h in index.read_handoffs(p):
@@ -116,6 +120,9 @@ def run(p, ids, groups, dry_run=False, yes=False):
         sid, state = s['id'], job_state(s['id'])
         print(f"{sid}  {s['t0']:%Y-%m-%d}  {s['prompts']} prompt{'' if s['prompts'] == 1 else 's'}  "
               f'{index.label(s)}')
+        rest = [m['id'][:8] for m in row[sid]['members'] if m['id'] not in {c['id'] for c in chosen}]
+        if rest:
+            print(f"    one index row with {', '.join(rest)}, not selected")
         if sid in live or state not in (None,) + DONE:
             print('    skipped: still running' + (f' (background session, {state})' if state else ''))
             continue

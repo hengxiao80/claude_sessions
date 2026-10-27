@@ -80,7 +80,7 @@ ids = []                                # optional
 
 Groups exist only in this file. A session goes to the first of these that claims it:
 
-1. a group whose `ids` holds the first 8 characters of its session ID;
+1. a group whose `ids` holds the first 8 characters of its session ID (of any of them, for a continued session);
 2. a group whose key starts the name you gave the session: `/rename expansion: part 11` files it under
    `expansion` (case ignored);
 3. the first group, in file order, with a `names` entry found in the name you gave the session or in Claude Code's
@@ -93,6 +93,15 @@ appear in the index in file order.
 A name like `<word>: ...` whose word is no group key creates no group. The session is filed by the other rules, and
 the index's **Checks** section names it, as it names every `ids` or `names` entry that claims no session (stale, or
 covered by an earlier entry). `claude-sessions index` run by hand prints the checks too.
+
+### Continued sessions
+
+When Claude Code hands a session to its background daemon (seen after a `/resume <ID>`, and after an `/exit` with a
+background task still running), it may go on under a new session ID: the new transcript starts with a copy of the old
+one, and the old one gets a `continued-in` record naming the new ID. `claude -r` lists both. The index shows such a
+chain as one row under the newest ID, with the older ones after it (`continues bc7793cf`): the newest session's name,
+the chain's dates and dumps, and its prompts counted once. Resume it by the newest ID; the older one stops where the
+hand-off was.
 
 ### Hand-off notes
 
@@ -123,4 +132,5 @@ All of them work on the project at or above the current directory.
 `~/.claude/projects/<dir>/<ID>/` (subagent transcripts, tool results), `~/.claude/file-history/<ID>/` (`/rewind`
 checkpoints) and `~/.claude/session-env/<ID>/`; a background session goes through `claude rm` first. It leaves the
 session's prompts in `~/.claude/history.jsonl` and its transcript dumps, skips sessions still running, deletes
-ungrouped sessions only by ID, and rebuilds the index afterwards.
+ungrouped sessions only by ID, and rebuilds the index afterwards. A group takes whole rows of the index, a continued
+session with its continuation; an ID takes only the session it names, and the listing names the rest of its row.

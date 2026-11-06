@@ -39,6 +39,11 @@ transcript on `PreCompact` and on `SessionEnd` after `/clear`, and rebuilds the 
 `SessionEnd`. It prints nothing (a `SessionStart` hook's output would go into the session's context); an error goes
 to stderr with exit status 1, which Claude Code shows and then carries on.
 
+Also in `~/.claude/settings.json`: `"cleanupPeriodDays": 3650` (about 10 years). The index is built from Claude
+Code's transcripts, and Claude Code's automatic cleanup deletes transcripts older than its default of 30 days: a
+session then drops out of the index and out of `claude -r` for good (its dumps, if any, stay in the transcripts
+directory).
+
 ## A project
 
 ```

@@ -16,6 +16,7 @@ CONFIG = '.claude-sessions.toml'
 CLAUDE = os.path.expanduser(os.environ.get('CLAUDE_CONFIG_DIR') or '~/.claude')
 PATHS = {'index': 'notes/sessions.md', 'transcripts': 'notes/transcripts', 'handoffs': 'notes/handoffs'}
 RESERVED = ('empty', 'ungrouped')       # names `delete --group` gives the sessions outside the groups
+SESSION_FILE = re.compile(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.jsonl')
 
 SKELETON = '''\
 # Claude Code sessions of this project, for claude-sessions (rules and
@@ -76,6 +77,14 @@ def sanitize(path):
     return re.sub(r'[^A-Za-z0-9]', '-', path)
 
 
+def transcripts(d, prefix=''):
+    """The session transcripts in Claude Code's transcript directory `d`, of the sessions whose ID starts with
+    `prefix`: the files <session ID>.jsonl. Other .jsonl files there are no sessions of their own, such as the
+    <ID>.orphaned-<...>.jsonl stub (a copy of a session's title records) Claude Code can leave next to a transcript."""
+    return [f for f in glob.glob(os.path.join(d, glob.escape(prefix) + '*.jsonl'))
+            if SESSION_FILE.fullmatch(os.path.basename(f))]
+
+
 def first_cwd(path):
     """The directory the session of transcript `path` was started in: the `cwd` of its first record that has one
     (later records follow the shell's cd)."""
@@ -99,7 +108,7 @@ def session_dirs(root):
         if n == name:
             dirs.insert(0, d)
         elif n.startswith(name + '-'):   # also /x/root_other; the start directory tells
-            cwd = next(filter(None, map(first_cwd, glob.glob(os.path.join(d, '*.jsonl')))), None)
+            cwd = next(filter(None, map(first_cwd, transcripts(d))), None)
             if cwd and find_root(cwd) == root:
                 dirs.append(d)
     return dirs

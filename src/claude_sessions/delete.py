@@ -7,7 +7,8 @@ Code continued under a new ID goes with its continuation; an ID takes only the s
 rest of its row, which then stays).
 
 Per session it deletes what Claude Code keeps under ~/.claude: the transcript projects/<project dir>/<ID>.jsonl
-(what `claude -r` lists), projects/<project dir>/<ID>/ (subagent transcripts, tool results), file-history/<ID>/
+(what `claude -r` lists) and any stub next to it (<ID>.orphaned-<...>.jsonl), projects/<project dir>/<ID>/ (subagent
+transcripts, tool results), file-history/<ID>/
 (checkpoints for /rewind) and session-env/<ID>/; a background session goes through `claude rm` first, which removes
 its jobs/<ID[:8]>/. Left alone: its prompts in ~/.claude/history.jsonl (the up-arrow history of all projects) and
 its transcript dumps. Sessions still running are skipped. Lists everything and asks before deleting (-n: only list;
@@ -69,6 +70,8 @@ def leftovers(s):
     sid = s['id']
     paths = [os.path.join(s['dir'], sid + '.jsonl'), os.path.join(s['dir'], sid),
              os.path.join(CLAUDE, 'file-history', sid), os.path.join(CLAUDE, 'session-env', sid)]
+    # Stubs next to the transcript (<ID>.orphaned-<...>.jsonl), which the index doesn't read as sessions.
+    paths += sorted(glob.glob(os.path.join(s['dir'], glob.escape(sid) + '.*.jsonl')))
     return [p for p in paths if os.path.lexists(p)]
 
 

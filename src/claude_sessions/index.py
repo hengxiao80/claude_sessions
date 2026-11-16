@@ -19,7 +19,7 @@ import json
 import os
 import re
 
-from .config import CONFIG, tilde
+from .config import CONFIG, tilde, transcripts
 
 KEYED = re.compile(r'\s*([A-Za-z0-9_-]+)\s*:')      # a name that looks like '<group key>: ...'
 
@@ -190,7 +190,7 @@ def handoff_rows(p, notes, sessions):
 def load_sessions(p):
     ref = (re.compile(re.escape(os.path.relpath(p.handoffs, p.root)) + r'/([\w.-]+\.md)') if p.handoffs
            else None)
-    sessions = fold([read_session(f, ref) for d in p.dirs for f in glob.glob(os.path.join(d, '*.jsonl'))])
+    sessions = fold([read_session(f, ref) for d in p.dirs for f in transcripts(d)])
     sessions.sort(key=lambda s: s['t0'])
     return sessions
 

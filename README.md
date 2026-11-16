@@ -59,7 +59,9 @@ it, and the hooks leave the project alone. Commit it.
 
 The project root is the directory of the nearest `.claude-sessions.toml` at or above the current one. The project's
 sessions are those started at the root or below it (Claude Code keeps them in `~/.claude/projects/<the start
-directory with every non-alphanumeric character as '-'>/`), unless a nearer `.claude-sessions.toml` claims them.
+directory with every non-alphanumeric character as '-'>/`, one `<session ID>.jsonl` each), unless a nearer
+`.claude-sessions.toml` claims them. Other `.jsonl` files there are no sessions, such as the
+`<ID>.orphaned-<...>.jsonl` stub (a copy of a session's title records) Claude Code can leave next to a transcript.
 Sessions started before `init` are included. `CLAUDE_CONFIG_DIR`, if set, takes the place of `~/.claude`.
 
 ### `[paths]`
@@ -133,9 +135,10 @@ All of them work on the project at or above the current directory.
 | `claude-sessions dump SESSION [LABEL]` | dump a transcript (a `.jsonl`, or a session ID prefix) to `<transcripts>/<UTC time>_<ID[:8]>_<LABEL>.md` |
 | `claude-sessions hook` | what the hooks run |
 
-`delete` removes, per session, `~/.claude/projects/<dir>/<ID>.jsonl` (what `claude -r` lists),
-`~/.claude/projects/<dir>/<ID>/` (subagent transcripts, tool results), `~/.claude/file-history/<ID>/` (`/rewind`
-checkpoints) and `~/.claude/session-env/<ID>/`; a background session goes through `claude rm` first. It leaves the
-session's prompts in `~/.claude/history.jsonl` and its transcript dumps, skips sessions still running, deletes
-ungrouped sessions only by ID, and rebuilds the index afterwards. A group takes whole rows of the index, a continued
-session with its continuation; an ID takes only the session it names, and the listing names the rest of its row.
+`delete` removes, per session, `~/.claude/projects/<dir>/<ID>.jsonl` (what `claude -r` lists) with any
+`<ID>.orphaned-<...>.jsonl` stub next to it, `~/.claude/projects/<dir>/<ID>/` (subagent transcripts, tool results),
+`~/.claude/file-history/<ID>/` (`/rewind` checkpoints) and `~/.claude/session-env/<ID>/`; a background session goes
+through `claude rm` first. It leaves the session's prompts in `~/.claude/history.jsonl` and its transcript dumps,
+skips sessions still running, deletes ungrouped sessions only by ID, and rebuilds the index afterwards. A group takes
+whole rows of the index, a continued session with its continuation; an ID takes only the session it names, and the
+listing names the rest of its row.

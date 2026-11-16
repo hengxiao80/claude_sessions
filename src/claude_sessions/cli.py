@@ -3,14 +3,13 @@
 A project is the nearest directory at or above the current one with a .claude-sessions.toml (`init` writes one).
 """
 import argparse
-import glob
 import json
 import os
 import subprocess
 import sys
 
 from . import delete, dump, index
-from .config import CONFIG, SKELETON, ConfigError, Project, add_gitignore, find_root, first_cwd
+from .config import CONFIG, SKELETON, ConfigError, Project, add_gitignore, find_root, first_cwd, transcripts
 
 
 def project():
@@ -82,7 +81,7 @@ def cmd_dump(args):
         sys.exit(f'{p.config}: transcripts are off ([paths] transcripts = "")')
     path = args.session
     if not os.path.isfile(path):
-        m = [f for d in p.dirs for f in glob.glob(os.path.join(d, glob.escape(path.lower()) + '*.jsonl'))]
+        m = [f for d in p.dirs for f in transcripts(d, path.lower())]
         if len(m) != 1:
             sys.exit(f'{path!r} is no file and matches ' + (', '.join(sorted(
                 os.path.basename(f)[:-6] for f in m)) if m else 'no session of this project'))
